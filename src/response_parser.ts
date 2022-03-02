@@ -229,45 +229,66 @@ export default class ResponseParser {
 
   constructor(private $q) {}
 
-  public parseTabels(results): IResultFormat[] {
-    return this._handelWildCardTables(
+  public parseTables(results): IResultFormat[] {
+    return this._handleWildCardTables(
       ResponseParser.parseData(results, 'tableReference.tableId', 'tableReference.tableId')
     );
   }
 
   public transformAnnotationResponse(options, data) {
     const table = data.data;
-    let timeColumnIndex = -1;
-    let textColumnIndex = -1;
-    let tagsColumnIndex = -1;
-    for (let i = 0; i < data.data.schema.fields.length; i++) {
-      if (data.data.schema.fields[i].name === 'time') {
-        timeColumnIndex = i;
-      } else if (data.data.schema.fields[i].name === 'text') {
-        textColumnIndex = i;
-      } else if (data.data.schema.fields[i].name === 'tags') {
-        tagsColumnIndex = i;
+    const index = {
+      time: -1,
+      timeend: -1, // camelCase for resulting Annotation below, but not for query column
+      text: -1,
+      tags: -1,
+    };
+    table.schema.fields.forEach((f, i) => {
+      if (index.hasOwnProperty(f.name)) {
+        index[f.name] = i;
       }
-    }
-    if (timeColumnIndex === -1) {
+    });
+    if (index.time < 0) {
       return this.$q.reject({
         message: 'Missing mandatory time column in annotation query.',
       });
     }
-    const list = [];
-    if (table.rows && table.rows.length) {
-      for (const row of table.rows) {
-        list.push({
-          annotation: options.annotation,
-          tags: row.f[tagsColumnIndex].v ? row.f[tagsColumnIndex].v.trim().split(/\s*,\s*/) : [],
-          text: row.f[textColumnIndex].v ? row.f[textColumnIndex].v.toString() : '',
-          time: Number(Math.floor(Number(row.f[timeColumnIndex].v))) * 1000,
-        });
-      }
+    // Could do early-out at the top, except that would skip $q.reject above
+    if (!table.rows || !table.rows.length || !table.rows.map) {
+      return [];
     }
-    return list;
+    return table.rows.map(row => ({
+      annotation: options.annotation,
+      time: ResponseParser.guessSecondsOrMillis(row.f[index.time].v),
+      timeEnd: index.timeend < 0 ? null : ResponseParser.guessSecondsOrMillis(row.f[index.timeend].v),
+      text: index.text < 0 ? '' : String(row.f[index.text].v),
+      tags: index.tags < 0 ? [] : String(row.f[index.tags].v).trim().split(/\s*,\s*/).filter(t =>
+          t.length // skip empty/blank
+      ),
+    }));
   }
-  private _handelWildCardTables(tables) {
+
+  /**
+   * Support millis for time columns in addition to original epoch-seconds
+   * by doing seconds-to-millis conversion only if the number is suspiciously
+   * low enough. This supports instants between 1971 and 2285 (inclusive) in
+   * either seconds or millis.
+   */
+  private static guessSecondsOrMillis(i) {
+    let t = Math.floor(Number(i));
+    // new Date(1e10) is 1970-04-26
+    // new Date(1e11) is 1973-03-03
+    // new Date(1e12) is 2001-09-08
+    //         new Date("2022-02-22T22:22:22Z").getTime() is 1645568542000
+    // new Date(1e13) is 2286-11-20
+    // new Date(1e14) is 5138-11-16
+    if (Math.abs(t) < 1e10) {
+      t *= 1000;
+    }
+    return t;
+  }
+
+  private _handleWildCardTables(tables) {
     let sorted = new Map();
     let newTables = [];
     for (const t of tables) {

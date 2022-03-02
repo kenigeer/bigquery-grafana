@@ -375,7 +375,7 @@ export class BigQueryDatasource {
   public async getTables(projectName: string, datasetName: string): Promise<IResultFormat[]> {
     const path = `v2/projects/${projectName}/datasets/${datasetName}/tables`;
     const data = await this.paginatedResults(path, 'tables');
-    return new ResponseParser(this.$q).parseTabels(data);
+    return new ResponseParser(this.$q).parseTables(data);
   }
 
   public async getTableFields(
